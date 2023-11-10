@@ -1,7 +1,6 @@
 /target
 /Cargo.lock
 .vscode/
-Makefile
 src/.Module.symvers.cmd
 src/.e1000_for_linux.ko.cmd
 src/.e1000_for_linux.mod.cmd
