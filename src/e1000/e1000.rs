@@ -82,8 +82,8 @@ impl<'a, K: KernelFunc> E1000Device<'a, K> {
 
         // Exercise3 Checkpoint 1
         // 分配tx_ring和rx_ring的内存空间并返回dma虚拟地址和物理地址
-        // let (tx_ring_vaddr, tx_ring_dma) = ?
-        // let (rx_ring_vaddr, rx_ring_dma) = ?
+        let (tx_ring_vaddr, tx_ring_dma) = unsafe { kfn.dma_alloc_coherent(alloc_tx_ring_pages) };
+        let (rx_ring_vaddr, rx_ring_dma) = unsafe { kfn.dma_alloc_coherent(alloc_rx_ring_pages) };
 
 
         let tx_ring = unsafe { from_raw_parts_mut(tx_ring_vaddr as *mut TxDesc, TX_RING_SIZE) };
@@ -115,10 +115,8 @@ impl<'a, K: KernelFunc> E1000Device<'a, K> {
 
         // Exercise3 Checkpoint 2
         // 分配tx_buffer和rx_buffer的内存空间 并返回dma虚拟地址和物理地址
-        // let (mut tx_mbufs_vaddr, mut tx_mbufs_dma) = ?;
-        // let (mut rx_mbufs_vaddr, mut rx_mbufs_dma) = ?;
-
-        
+        let (mut tx_mbufs_vaddr, mut tx_mbufs_dma) = unsafe { kfn.dma_alloc_coherent(alloc_tx_buffer_pages) };
+        let (mut rx_mbufs_vaddr, mut rx_mbufs_dma) = unsafe { kfn.dma_alloc_coherent(alloc_rx_buffer_pages) };
 
         if rx_mbufs_vaddr == 0 {
             panic!("e1000, alloc dma rx buffer failed");
@@ -200,31 +198,33 @@ impl<'a, K: KernelFunc> E1000Device<'a, K> {
         fence_w();
 
         // [E1000 14.5] Transmit initialization
-        if (self.tx_ring.len() * size_of::<TxDesc>()) % 128 != 0 {
+        let tx_len = self.tx_ring.len() * size_of::<TxDesc>();
+        if tx_len % 128 != 0 {
             //panic("e1000");
             error!("e1000, size of tx_ring is invalid");
         }
 
         // Exercise3 Checkpoint 3
         // set tx descriptor base address and tx ring length
-        // self.regs[??].write(??);
-        // self.regs[??].write(??);
-
-
-
+        self.regs[E1000_TDLEN].write(tx_len as u32);
+        self.regs[E1000_TDBAH].write((self.tx_ring_dma >> 32) as u32);
+        self.regs[E1000_TDBAL].write((self.tx_ring_dma & 0x00000000ffffffff) as u32);
 
         self.regs[E1000_TDT].write(0);
         self.regs[E1000_TDH].write(0);
 
+        
         // [E1000 14.4] Receive initialization
-        if (self.rx_ring.len() * size_of::<RxDesc>()) % 128 != 0 {
+        let rx_len =self.rx_ring.len() * size_of::<RxDesc>();
+        if rx_len % 128 != 0 {
             error!("e1000, size of rx_ring is invalid");
         }
 
         // Exercise3 Checkpoint 4
         // set rx descriptor base address and rx ring length
-        // self.regs[??].write(??);
-        // self.regs[??].write(??);
+        self.regs[E1000_RDLEN].write(rx_len as u32);
+        self.regs[E1000_RDBAH].write((self.rx_ring_dma >> 32) as u32);
+        self.regs[E1000_RDBAL].write((self.rx_ring_dma & 0x00000000ffffffff) as u32);
 
         self.regs[E1000_RDH].write(0);
         self.regs[E1000_RDT].write((RX_RING_SIZE - 1) as u32);

@@ -3,6 +3,7 @@
 
 use core::slice::from_raw_parts_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+use alloc::boxed::Box;
 use kernel::prelude::*;
 use kernel::{
     bindings, c_str, define_pci_id_table, device, dma, driver,
@@ -67,7 +68,7 @@ const MAC_HWADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x55];
 
 module! {
     type: RustE1000dev,
-    name: "rust_e1000dev",
+    name: "rust_e1000_dev",
     author: "Luoyuan Xiao",
     description: "Rust e1000 device driver",
     license: "GPL",
@@ -78,6 +79,40 @@ struct E1000Driver;
 impl E1000Driver {
     fn handle_rx_irq(dev: &net::Device, napi: &Napi, data: &NetData) {  
         // Exercise4 Checkpoint 1
+        let mut packets = 0;
+        let mut bytes = 0;
+
+        let mut dev_e1k = data.dev_e1000.lock_irqdisable();
+        match dev_e1k.as_mut().unwrap().e1000_recv() {
+            Some(recv_vec) => {
+                packets = recv_vec.len();
+                recv_vec.iter().for_each(|packet| {
+                    let mut len = packet.len();
+    
+                    let skb = dev.alloc_skb_ip_align(RXBUFFER).unwrap();
+
+                    let skb_buffer = unsafe { from_raw_parts_mut(skb.head_data().as_ptr() as *mut u8, len) };
+                    skb_buffer.copy_from_slice(&packet);
+                    skb.put(len as u32);
+    
+                    let protocol = skb.eth_type_trans(dev);
+                    skb.protocol_set(protocol);
+
+                    // Send the skb up the stack
+                    napi.gro_receive(&skb);
+    
+                    bytes += len;
+                    pr_info!("SkBuff protocol: {:#x}, {:x}{:x}\n", protocol, skb_buffer[0], skb_buffer[1]);
+                });
+                pr_info!("Received packets: {}, bytes: {} by handle_rx_irq\n", packets, bytes);
+            },
+            _ => {
+                pr_warn!("No packets received\n");
+            }   
+        }
+
+        data.stats.rx_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+        data.stats.rx_packets.fetch_add(packets as u64, Ordering::Relaxed);
     }
 
     fn handle_tx_irq() {
@@ -238,6 +273,21 @@ impl net::DeviceOperations for E1000Driver {
         // step2 request_irq
         // step3 set up irq_handler
 
+        // step1
+        let irq_data = Box::try_new(IrqData {
+            dev_e1000: data.dev_e1000.clone(),
+            res: data.res.clone(),
+            napi: data.napi.clone(),
+        }).unwrap();
+
+        // step2
+        let irq_request_ptr = Box::into_raw(Box::try_new(
+            request_irq(data.irq, irq_data).unwrap()
+        ).unwrap());
+
+        // step3
+        data.irq_handler.store(irq_request_ptr, Ordering::Relaxed);
+
 
         // Enable NAPI scheduling
         data.napi.enable();
@@ -276,6 +326,31 @@ impl net::DeviceOperations for E1000Driver {
     ) -> NetdevTx {
         pr_info!("start xmit\n");
         // Exercise4 Checkpoint 2
+        skb.put_padto(bindings::ETH_ZLEN);
+
+        let skb_data = skb.head_data();
+        let bytes = skb.len();
+
+        pr_info!("SkBuff len: {}, data len: {}\n", bytes, skb_data.len());
+        dev.sent_queue(bytes);
+
+        let mut dev_e1k = data.dev_e1000.lock_irqdisable(); 
+        let len = dev_e1k.as_mut().unwrap().e1000_transmit(skb_data);
+        if len < 0 {
+            pr_warn!("Failed to start_xmit SkBuff! packet len: {}", len);
+            return NetdevTx::Busy;
+        }
+
+        skb.napi_consume(64);
+
+        let packets = 1;
+
+        data.stats.tx_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+        data.stats.tx_packets.fetch_add(packets, Ordering::Relaxed);
+
+        dev.completed_queue(packets as u32, bytes as u32);
+        
+        NetdevTx::Ok
     }
 
     /// Corresponds to `ndo_get_stats64` in `struct net_device_ops`.
@@ -318,7 +393,7 @@ impl pci::Driver for E1000Driver {
         pci_dev.set_master();
 
         let bar_mask = pci_dev.select_bars(bindings::IORESOURCE_MEM as u64);
-        pci_dev.request_selected_regions(bar_mask, c_str!("e1000"))?;
+        pci_dev.request_selected_regions(bar_mask, c_str!("e1000d"))?;
         // Todo: pci_release_selected_regions when removing
 
         let res0 = pci_dev.iter_resource().nth(0).unwrap();
