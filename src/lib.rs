@@ -7,7 +7,7 @@ extern crate alloc;
 extern crate log;
 
 mod utils;
-mod e1000_for_linux;
+// mod e1000_for_linux;
 
 pub mod e1000;
 pub mod pci;

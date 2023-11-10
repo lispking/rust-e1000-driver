@@ -393,7 +393,7 @@ impl pci::Driver for E1000Driver {
         pci_dev.set_master();
 
         let bar_mask = pci_dev.select_bars(bindings::IORESOURCE_MEM as u64);
-        pci_dev.request_selected_regions(bar_mask, c_str!("e1000d"))?;
+        pci_dev.request_selected_regions(bar_mask, c_str!("e1000"))?;
         // Todo: pci_release_selected_regions when removing
 
         let res0 = pci_dev.iter_resource().nth(0).unwrap();
