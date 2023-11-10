@@ -16,3 +16,4 @@ src/e1000_for_linux.mod.c
 src/e1000_for_linux.mod.o
 src/e1000_for_linux.o
 src/modules.order
+rust-project.json
